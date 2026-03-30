@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fantinato</title>
+<style>
+body { font-family: Calibri, Arial; background:#f5f5f5; margin:10px }
+.container { max-width:1200px; margin:auto }
+.logo { text-align:center }
+.logo img { max-width:220px }
+form, table, .box { background:#fff; padding:15px; border-radius:10px; margin-bottom:15px }
+input, select, button { padding:6px; margin:4px 0 }
+input[type=number]{ width:60px }
+table { width:100%; border-collapse: collapse }
+th, td { border:1px solid #ddd; padding:6px; text-align:center }
+th { background:#333; color:#fff }
+.grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px }
+.paes { display:grid; grid-template-columns:repeat(2,1fr); gap:10px }
+.item { display:flex; justify-content:space-between; align-items:center; border:1px solid #ddd; padding:10px; border-radius:8px }
+.resumo { display:flex; gap:10px }
+.card { background:#fff; padding:10px; border-radius:10px; flex:1; text-align:center }
+.filtros { display:grid; grid-template-columns:repeat(4,1fr); gap:10px }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="logo">
+<img src="Fantinato.png" alt="Logo" onerror="this.style.display='none'">
+</div>
+
+<form id="form">
+<div class="grid">
+<input id="nome" placeholder="Nome" required>
+<input id="telefone" placeholder="Telefone" required>
+<input id="endereco" placeholder="Endereço (fora do condomínio)">
+<input id="bloco" placeholder="Bloco">
+<input id="apto" placeholder="Apto">
+<input type="datetime-local" id="dataEntrega" required>
+</div>
+
+<h3>Pães</h3>
+<div class="paes">
+<div class="item">Caseiro <input type="number" min="0" id="caseiro"></div>
+<div class="item">Torresmo <input type="number" min="0" id="torresmo"></div>
+<div class="item">Calabresa <input type="number" min="0" id="calabresa"></div>
+<div class="item">Atum <input type="number" min="0" id="atum"></div>
+<div class="item">Presunto e Queijo <input type="number" min="0" id="pq"></div>
+<div class="item">Pãezinhos (6 un) <input type="number" min="0" id="paezinhos"></div>
+</div>
+
+<input id="valor" readonly placeholder="Valor automático">
+<select id="pagamento">
+<option>Pix</option>
+<option>Débito</option>
+<option>Crédito</option>
+<option>Dinheiro</option>
+<option selected>Pendente</option>
+<option>Desistiu</option>
+</select>
+
+<button>Salvar Pedido</button>
+</form>
+
+<div class="resumo">
+<div class="card">Recebido: R$ <span id="total">0.00</span></div>
+<div class="card">Pendentes: R$ <span id="pendentes">0.00</span></div>
+<div class="card">Desistiram: R$ <span id="desistiram">0.00</span></div>
+</div>
+
+<div class="box filtros">
+<input type="date" id="filtroData">
+<select id="filtroPao">
+<option value="">Todos</option>
+<option value="caseiro">Caseiro</option>
+<option value="torresmo">Torresmo</option>
+<option value="calabresa">Calabresa</option>
+<option value="atum">Atum</option>
+<option value="pq">Presunto e Queijo</option>
+<option value="paezinhos">Pãezinhos</option>
+</select>
+<button onclick="exportarExcel()">Exportar Excel</button>
+<button onclick="verHistorico()">Ver Histórico</button>
+</div>
+
+<table>
+<thead>
+<tr>
+<th>Nome</th>
+<th>Local</th>
+<th>Pães</th>
+<th>Entrega</th>
+<th>Valor</th>
+<th>Pagamento</th>
+<th>Status</th>
+<th>Ações</th>
+</tr>
+</thead>
+<tbody id="lista"></tbody>
+</table>
+
+</div>
+
+<script>
+let pedidos = JSON.parse(localStorage.getItem('pedidos')) || [];
+let modoHistorico = false;
+const precos = { caseiro:10, torresmo:15, calabresa:15, atum:15, pq:15, paezinhos:18 };
+
+function getDefaultDateTime(){
+ const d=new Date(); d.setDate(d.getDate()+1); d.setHours(18,0,0,0);
+ return d.toISOString().slice(0,16);
+}
+
+dataEntrega.value=getDefaultDateTime();
+
+Object.keys(precos).forEach(id=>{
+ document.getElementById(id).addEventListener('input', calc);
+});
+
+function calc(){
+ let total=0;
+ Object.keys(precos).forEach(k=>{
+  let q=parseInt(document.getElementById(k).value)||0;
+  if(q<0) q=0;
+  document.getElementById(k).value=q;
+  total+=q*precos[k];
+ });
+ valor.value=total.toFixed(2);
+}
+
+form.addEventListener('submit', e=>{
+ e.preventDefault();
+ const itens={};
+ Object.keys(precos).forEach(k=>{
+  const q=parseInt(document.getElementById(k).value)||0;
+  if(q>0) itens[k]=q;
+ });
+
+ let local = endereco.value || `Bloco ${bloco.value} / Apto ${apto.value}`;
+
+ pedidos.push({
+  id:Date.now(), nome:nome.value, telefone:telefone.value,
+  local, dataEntrega:dataEntrega.value, itens,
+  valor:parseFloat(valor.value)||0, pagamento:pagamento.value, status:'Pendente'
+ });
+
+ salvar(); form.reset(); dataEntrega.value=getDefaultDateTime(); render();
+});
+
+function render(){
+ lista.innerHTML='';
+ let recebido=0, pend=0, desist=0;
+ const fData=filtroData.value;
+ const fPao=filtroPao.value;
+
+ let listaPedidos = modoHistorico ? pedidos : pedidos.filter(p=> p.status!=='Finalizado' || p.pagamento==='Pendente');
+
+ listaPedidos.sort((a,b)=> new Date(a.dataEntrega)-new Date(b.dataEntrega));
+
+ pedidos.forEach(p=>{
+  if(p.status==='Finalizado') recebido+=p.valor;
+  if(p.pagamento==='Pendente') pend+=p.valor;
+  if(p.pagamento==='Desistiu') desist+=p.valor;
+ });
+
+ listaPedidos.forEach(p=>{
+  if(fData && !p.dataEntrega.startsWith(fData)) return;
+  if(fPao && !(p.itens||{})[fPao]) return;
+
+  const itensTxt=Object.entries(p.itens||{}).map(([k,v])=>`${k} x${v}`).join(', ')||'-';
+
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+  <td>${p.nome}</td>
+  <td>${p.local}</td>
+  <td>${itensTxt}</td>
+  <td>${new Date(p.dataEntrega).toLocaleString()}</td>
+  <td>R$ ${p.valor.toFixed(2)}</td>
+  <td>
+  <select onchange="alterarPagamento(${p.id},this.value)">
+  <option ${p.pagamento==='Pix'?'selected':''}>Pix</option>
+  <option ${p.pagamento==='Débito'?'selected':''}>Débito</option>
+  <option ${p.pagamento==='Crédito'?'selected':''}>Crédito</option>
+  <option ${p.pagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
+  <option ${p.pagamento==='Pendente'?'selected':''}>Pendente</option>
+  <option ${p.pagamento==='Desistiu'?'selected':''}>Desistiu</option>
+  </select>
+  </td>
+  <td>${p.status}</td>
+  <td>
+  <button onclick="entregar(${p.id})">✔</button>
+  <button onclick="cobrar(${p.id})">💲</button>
+  ${p.pagamento!=='Pendente' && p.status!=='Finalizado'?`<button onclick="finalizar(${p.id})">Finalizar</button>`:''}
+  </td>`;
+
+  lista.appendChild(tr);
+ });
+
+ total.textContent=recebido.toFixed(2);
+ pendentes.textContent=pend.toFixed(2);
+ desistiram.textContent=desist.toFixed(2);
+}
+
+function verHistorico(){ modoHistorico = !modoHistorico; render(); }
+
+function alterarPagamento(id,val){ pedidos.forEach(p=>{if(p.id===id)p.pagamento=val}); salvar(); render(); }
+function entregar(id){ const p=pedidos.find(x=>x.id===id); p.status='Entregue'; enviarEntrega(p); salvar(); render(); }
+function cobrar(id){ const p=pedidos.find(x=>x.id===id); enviarCobranca(p); }
+function finalizar(id){ const p=pedidos.find(x=>x.id===id); p.status='Finalizado'; salvar(); render(); }
+function salvar(){ localStorage.setItem('pedidos',JSON.stringify(pedidos)); }
+
+function enviarEntrega(p){
+ const msg=`Olá ${p.nome}, seu pedido está a caminho 🚚\nLocal: ${p.local}`;
+ abrirWhats(p.telefone,msg);
+}
+
+function enviarCobranca(p){
+ const msg=`Olá ${p.nome}, lembrete amigável para o pagamento do seu pedido 😊\nPix: 11994652481 - Aruan`;
+ abrirWhats(p.telefone,msg);
+}
+
+function abrirWhats(tel,msg){
+ let numero=tel.replace(/\D/g,'');
+ if(!numero.startsWith('55')) numero='55'+numero;
+ window.open(`https://wa.me/${numero}?text=${encodeURIComponent(msg)}`,'_blank');
+}
+
+function exportarExcel(){
+ let csv="Nome;Local;Valor;Pagamento;Status\n";
+ pedidos.forEach(p=>{
+  csv+=`${p.nome};${p.local};${p.valor};${p.pagamento};${p.status}\n`;
+ });
+ const blob=new Blob([csv],{type:'application/vnd.ms-excel'});
+ const link=document.createElement('a');
+ link.href=URL.createObjectURL(blob);
+ link.download='relatorio.xls';
+ link.click();
+}
+
+filtroData.addEventListener('change', render);
+filtroPao.addEventListener('change', render);
+
+render();
+</script>
+</body>
+</html>
